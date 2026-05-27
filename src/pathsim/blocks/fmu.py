@@ -15,10 +15,16 @@ from .dynsys import DynamicalSystem
 from ..events.schedule import Schedule, ScheduleList
 from ..events.zerocrossing import ZeroCrossing
 from ..utils.fmuwrapper import FMUWrapper
+from ..utils.deprecation import deprecated
 
 
 # BLOCKS ================================================================================
 
+@deprecated(
+    version="1.0.0",
+    replacement="pathsim_fmi.CoSimulationFMU",
+    reason="This block has moved to the pathsim-fmi package: pip install pathsim-fmi",
+)
 class CoSimulationFMU(Block):
     """Co-Simulation FMU block using FMPy with support for FMI 2.0 and FMI 3.0.
 
@@ -105,6 +111,11 @@ class CoSimulationFMU(Block):
         return 0
 
 
+@deprecated(
+    version="1.0.0",
+    replacement="pathsim_fmi.ModelExchangeFMU",
+    reason="This block has moved to the pathsim-fmi package: pip install pathsim-fmi",
+)
 class ModelExchangeFMU(DynamicalSystem):
     """Model Exchange FMU block using FMPy with support for FMI 2.0 and FMI 3.0.
 
