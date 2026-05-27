@@ -19,9 +19,12 @@ requires-python = ">=3.8"
 dependencies = ["numpy>=1.15", "matplotlib>=3.1", "scipy>=1.2"]
 
 [project.optional-dependencies]
+# Both `rf` and `fmi` are deprecated as of v0.22 — the corresponding blocks
+# have moved to their own toolboxes (pathsim-rf, pathsim-fmi) and the extras
+# will be removed in v1.0.0. Install the toolboxes directly instead.
 rf = ["scikit-rf"]
-test = ["pytest", "pytest-cov", "pytest-xdist", "FMPy", "scikit-rf"]
 fmi = ["FMPy"]
+test = ["pytest", "pytest-cov", "pytest-xdist", "FMPy", "scikit-rf"]
 
 [project.urls]
 Homepage = "https://github.com/pathsim/pathsim"
