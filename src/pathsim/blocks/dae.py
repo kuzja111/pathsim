@@ -9,6 +9,8 @@
 
 import numpy as np
 
+from scipy.linalg import lu_factor, lu_solve
+
 from ._block import Block
 
 from ..optim.operator import DynamicOperator
@@ -275,4 +277,316 @@ class SemiExplicitDAE(Block):
         x, u = self.engine.state, self.inputs.to_array()
         self._z = self._solve_z(x, u, t)
         f = self.func_dyn(x, self._z, u, t)
+        return self.engine.step(f, dt)
+
+
+class MassMatrixDAE(Block):
+    """Differential-algebraic equation (DAE) system in mass-matrix form.
+
+    Integrates an implicit system with a constant, possibly singular mass
+    matrix :math:`M`
+
+    .. math::
+
+        M \\, \\dot{x} = \\mathrm{func}(x, u, t)
+
+
+    where :math:`u` is the block input and the output is the full state
+    :math:`y = x`.
+
+    If :math:`M` is nonsingular the system is a plain (mass-weighted) ODE and
+    the block presents the reduced right hand side :math:`\\dot{x} = M^{-1}
+    \\mathrm{func}(x, u, t)` to the integration engine, reusing a single LU
+    factorisation of :math:`M`.
+
+    If :math:`M` is singular the all-zero rows are interpreted as algebraic
+    constraints :math:`0 = \\mathrm{func}_a(x, u, t)`, and the corresponding
+    states are the algebraic variables. They are eliminated at every evaluation
+    by an internal Newton-Anderson iteration (:class:`.NewtonAnderson`), so the
+    differential states integrate with any solver, explicit or implicit. The
+    constraint is assumed to be index-1.
+
+    Like the `ODE` block, the reduced right hand side is wrapped in a
+    `DynamicOperator` and the engine Jacobian is taken from `op_dyn.jac_x`.
+
+    Note
+    ----
+    For the singular case the mass matrix has to be in index-1 form, i.e. the
+    differential rows must not weight the derivatives of the algebraic states
+    (the corresponding block of :math:`M` is zero). For a nonsingular mass
+    matrix an analytical reduced Jacobian :math:`M^{-1} \\partial \\mathrm{func}
+    / \\partial x` is used when `jac` is supplied, otherwise the Jacobian comes
+    from central finite differences through the reduced right hand side.
+
+    Example
+    -------
+    A singular index-1 system where the second equation is an algebraic
+    constraint :math:`x_0 + x_1 = u`:
+
+    .. code-block:: python
+
+        import numpy as np
+        from pathsim.blocks import MassMatrixDAE
+
+        #M is singular -> second row is the algebraic constraint
+        M = np.array([[1.0, 0.0],
+                      [0.0, 0.0]])
+
+        def func(x, u, t):
+            return np.array([
+                -x[0] + x[1],        #x0' = -x0 + x1
+                x[0] + x[1] - u[0]   #0 = x0 + x1 - u
+                ])
+
+        dae = MassMatrixDAE(func, M, initial_value=[0.0, 0.0])
+
+
+    Parameters
+    ----------
+    func : callable
+        right hand side function with signature `func(x, u, t)` returning an
+        array of the dimension of the state `x`
+    mass : array[array[float]]
+        constant mass matrix `M`, possibly singular (all-zero rows mark
+        algebraic constraints)
+    initial_value : float, array[float]
+        initial value / initial condition of the full state `x`
+    jac : callable, None
+        optional analytical jacobian of `func` with respect to `x` with
+        signature `jac(x, u, t)`, central finite differences are used if `None`
+
+    Attributes
+    ----------
+    mass : array[array[float]]
+        the constant mass matrix `M`
+    engine : Solver
+        numerical integration engine for the differential states
+    op_dyn : DynamicOperator
+        dynamic operator wrapping the reduced right hand side
+    opt : NewtonAnderson
+        internal Newton-Anderson optimizer for the algebraic constraints
+    """
+
+    def __init__(self, func=lambda x, u, t: -x, mass=1.0, initial_value=0.0, jac=None):
+        super().__init__()
+
+        #right hand side and optional analytical jacobian
+        self.func = func
+        self.jac = jac
+
+        #constant mass matrix
+        M = np.atleast_2d(np.asarray(mass, dtype=float))
+        n = M.shape[0]
+        if M.shape != (n, n):
+            raise ValueError(f"mass matrix must be square but has shape {M.shape}")
+        self.mass = M
+
+        #full initial state
+        x0 = np.atleast_1d(initial_value).astype(float)
+        if x0.size != n:
+            raise ValueError(
+                f"initial_value dimension {x0.size} does not match mass matrix {n}"
+                )
+        self._x0 = x0
+
+        #partition into differential (nonzero row) and algebraic (zero row) states
+        _nonzero_row = np.any(M != 0.0, axis=1)
+        self._d = np.flatnonzero(_nonzero_row)
+        self._a = np.flatnonzero(~_nonzero_row)
+
+        #index-1 form: differential rows must not weight algebraic derivatives
+        if self._a.size and np.any(M[np.ix_(self._d, self._a)] != 0.0):
+            raise ValueError(
+                "mass matrix is not in index-1 form: differential rows couple "
+                "to the derivatives of algebraic states"
+                )
+
+        #LU factorisation of the (constant) differential mass block
+        self._lu = lu_factor(M[np.ix_(self._d, self._d)])
+
+        #the engine integrates only the differential states
+        self.initial_value = x0[self._d]
+
+        #initial guess and warm-start for the algebraic states
+        self._xa = x0[self._a].copy()
+
+        #internal optimizer for the algebraic constraints (consistent with engines)
+        self.opt = NewtonAnderson()
+
+        #dynamic operator for the reduced right hand side, mirrors the ODE block;
+        #for a nonsingular mass matrix the reduced Jacobian M^-1 df/dx is analytic
+        #when 'jac' is given, otherwise the operator falls back to finite differences
+        _jac_x = None
+        if self._a.size == 0 and jac is not None:
+            _jac_x = lambda x, u, t: lu_solve(self._lu, np.atleast_2d(jac(x, u, t)))
+        self.op_dyn = DynamicOperator(func=self._rhs, jac_x=_jac_x)
+
+        #pre-size the output register to the full state
+        self.outputs.update_from_array(x0)
+
+
+    def __len__(self):
+        #only the algebraic states introduce an input passthrough
+        if not self._active:
+            return 0
+        return 1 if self._a.size else 0
+
+
+    def reset(self):
+        """Reset inputs, outputs, the engine and the warm-start of the
+        algebraic states.
+        """
+        super().reset()
+        self._xa = self._x0[self._a].copy()
+        x_d = self.engine.state if self.engine else self.initial_value
+        self.outputs.update_from_array(self._full(np.atleast_1d(x_d)))
+
+
+    def _full(self, x_d):
+        """Assemble the full state from the differential states and the current
+        algebraic states.
+
+        Parameters
+        ----------
+        x_d : array[float]
+            differential states
+
+        Returns
+        -------
+        x : array[float]
+            full state with differential and algebraic components in place
+        """
+        x = np.empty(self.mass.shape[0])
+        x[self._d] = x_d
+        x[self._a] = self._xa
+        return x
+
+
+    def _solve_xa(self, x_d, u, t):
+        """Eliminate the algebraic states by solving the zero-row constraints
+        for the algebraic components, warm-started with the previous solution.
+        Does not mutate the warm-start.
+
+        Parameters
+        ----------
+        x_d : array[float]
+            current differential states
+        u : array[float]
+            current block input
+        t : float
+            evaluation time
+
+        Returns
+        -------
+        xa : array[float]
+            algebraic states satisfying the constraints
+        """
+        if self._a.size == 0:
+            return self._xa
+
+        def _res(xa):
+            x = np.empty(self.mass.shape[0])
+            x[self._d], x[self._a] = x_d, xa
+            return self.func(x, u, t)[self._a]
+
+        _jac = None
+        if self.jac is not None:
+            def _jac(xa):
+                x = np.empty(self.mass.shape[0])
+                x[self._d], x[self._a] = x_d, xa
+                return np.atleast_2d(self.jac(x, u, t))[np.ix_(self._a, self._a)]
+
+        xa, _, _ = solve_root(self.opt, _res, self._xa, _jac)
+        return xa
+
+
+    def _rhs(self, x_d, u, t):
+        """Reduced right hand side of the differential states, with the
+        algebraic states eliminated and the differential mass block inverted.
+
+        Parameters
+        ----------
+        x_d : array[float]
+            current differential states
+        u : array[float]
+            current block input
+        t : float
+            evaluation time
+
+        Returns
+        -------
+        dx_d : array[float]
+            derivative of the differential states
+        """
+        if self._a.size == 0:
+            x = self._full(x_d)
+        else:
+            xa = self._solve_xa(x_d, u, t)
+            x = np.empty(self.mass.shape[0])
+            x[self._d], x[self._a] = x_d, xa
+        return lu_solve(self._lu, self.func(x, u, t)[self._d])
+
+
+    def update(self, t):
+        """Eliminate the algebraic states for the current input and expose the
+        full state at the output.
+
+        Parameters
+        ----------
+        t : float
+            evaluation time
+        """
+        x_d, u = self.engine.state, self.inputs.to_array()
+        self._xa = self._solve_xa(x_d, u, t)
+        self.outputs.update_from_array(self._full(x_d))
+
+
+    def solve(self, t, dt):
+        """Advance the implicit update equation of the solver with the reduced
+        right hand side and its Jacobian from the dynamic operator.
+
+        Parameters
+        ----------
+        t : float
+            evaluation time
+        dt : float
+            integration timestep
+
+        Returns
+        -------
+        error : float
+            solver residual norm
+        """
+        x_d, u = self.engine.state, self.inputs.to_array()
+
+        #commit the warm-start at the current state, then linearize around it
+        self._xa = self._solve_xa(x_d, u, t)
+        f = lu_solve(self._lu, self.func(self._full(x_d), u, t)[self._d])
+        J = self.op_dyn.jac_x(x_d, u, t)
+
+        return self.engine.solve(f, J, dt)
+
+
+    def step(self, t, dt):
+        """Compute the timestep update with the reduced right hand side.
+
+        Parameters
+        ----------
+        t : float
+            evaluation time
+        dt : float
+            integration timestep
+
+        Returns
+        -------
+        success : bool
+            step was successful
+        error : float
+            local truncation error from adaptive integrators
+        scale : float
+            timestep rescale from adaptive integrators
+        """
+        x_d, u = self.engine.state, self.inputs.to_array()
+        self._xa = self._solve_xa(x_d, u, t)
+        f = lu_solve(self._lu, self.func(self._full(x_d), u, t)[self._d])
         return self.engine.step(f, dt)
