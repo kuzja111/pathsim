@@ -10,12 +10,19 @@
 import unittest
 import numpy as np
 import os
+import platform
 
 from pathlib import Path
 
 
 # Path to test FMU files
 TEST_DATA_DIR = Path(__file__).parent.parent.parent.parent / "docs" / "source" / "examples" / "data"
+
+# Co-simulation test FMU per host platform
+_PLATFORM_FMU_NAMES = {
+    "Windows": "CoupledClutches_CS_win64.fmu",
+    "Linux": "CoupledClutches_CS_linux64.fmu",
+}
 
 
 # Helper to check if FMPy is available
@@ -52,13 +59,14 @@ class TestFMUWrapperCoSimulation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """Check if test FMU exists"""
-        cls.fmu_path = TEST_DATA_DIR / "CoupledClutches_CS_win64.fmu"
+        """Check if test FMU exists for the host platform"""
+        fmu_name = _PLATFORM_FMU_NAMES.get(platform.system())
+        if fmu_name is None:
+            raise unittest.SkipTest(f"No test FMU available for platform '{platform.system()}'")
+
+        cls.fmu_path = TEST_DATA_DIR / fmu_name
         if not cls.fmu_path.exists():
-            # Try linux version
-            cls.fmu_path = TEST_DATA_DIR / "CoupledClutches_CS_linux64.fmu"
-        if not cls.fmu_path.exists():
-            raise unittest.SkipTest(f"Test FMU not found in {TEST_DATA_DIR}")
+            raise unittest.SkipTest(f"Test FMU not found: {cls.fmu_path}")
 
     def setUp(self):
         from pathsim.utils.fmuwrapper import FMUWrapper
