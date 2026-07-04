@@ -15,16 +15,18 @@ from ._rungekutta import ExplicitRungeKutta
 # SOLVERS ==============================================================================
 
 class RKF45(ExplicitRungeKutta):
-    """Runge-Kutta-Fehlberg 4(5) pair. Six stages, 4th order propagation with
-    5th order error estimate.
+    """Runge-Kutta-Fehlberg 5(4) pair. Six stages, 5th order propagation with
+    an embedded 4th order solution for local error estimation (local
+    extrapolation, matching the ``RKCK54`` / ``RKDP54`` convention).
 
     The historically first widely-used embedded pair for automatic step-size
-    control. The 4th order solution is propagated; the difference to the 5th
-    order solution provides a local error estimate.
+    control. The 5th order solution ``b5`` is propagated; the difference to the
+    4th order solution ``b4`` (``TR = b5 - b4``) provides a local error estimate
+    of the lower-order result.
 
     Characteristics
     ---------------
-    * Order: 4 (propagating) / 5 (error estimate)
+    * Order: 5 (propagating) / 4 (error estimate)
     * Stages: 6
     * Explicit, adaptive timestep
 
@@ -63,15 +65,15 @@ class RKF45(ExplicitRungeKutta):
         #intermediate evaluation times
         self.eval_stages = [0.0, 1/4, 3/8, 12/13, 1, 1/2]
 
-        #extended butcher table 
+        #extended butcher table (propagates the 5th order weights b5)
         self.BT = {
             0: [      1/4],
             1: [     3/32,       9/32],
-            2: [1932/2197, -7200/2197,  7296/2197],
-            3: [  439/216,         -8,   3680/513, -845/4104],
-            4: [    -8/27,          2, -3554/2565, 1859/4104, -11/40],
-            5: [   25/216,          0,  1408/2565, 2197/4104,   -1/5, 0]
+            2: [1932/2197, -7200/2197,   7296/2197],
+            3: [  439/216,         -8,    3680/513,  -845/4104],
+            4: [    -8/27,          2,  -3544/2565,  1859/4104,  -11/40],
+            5: [   16/135,          0, 6656/12825, 28561/56430,   -9/50, 2/55]
             }
 
-        #coefficients for local truncation error estimate
+        #coefficients for local truncation error estimate (TR = b5 - b4)
         self.TR = [1/360, 0, -128/4275, -2197/75240, 1/50, 2/55]
