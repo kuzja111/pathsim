@@ -69,7 +69,7 @@ class TestOnePort(unittest.TestCase):
         "Test space-state ABCD parameters."
         # ABCD(E) arrays from scikit-rf
         ntwk = rf.data.ring_slot_meas
-        vf = rf.VectorFitting(ntwk)
+        vf = rf.vectorFitting.VectorFitting(ntwk)
         vf.auto_fit()
         A, B, C, D, E = vf._get_ABCDE()
 
