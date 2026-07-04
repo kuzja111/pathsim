@@ -411,7 +411,8 @@ class FMUWrapper:
         """Get default step size from FMU's default experiment, if defined."""
         de = self.model_description.defaultExperiment
         if de is not None:
-            return getattr(de, 'stepSize', None)
+            step_size = getattr(de, 'stepSize', None)
+            return float(step_size) if step_size is not None else None
         return None
 
     @property
@@ -419,7 +420,8 @@ class FMUWrapper:
         """Get default tolerance from FMU's default experiment, if defined."""
         de = self.model_description.defaultExperiment
         if de is not None:
-            return getattr(de, 'tolerance', None)
+            tolerance = getattr(de, 'tolerance', None)
+            return float(tolerance) if tolerance is not None else None
         return None
 
     @property
