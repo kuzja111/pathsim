@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 try:
     import skrf as rf
+    from skrf.vectorFitting import VectorFitting as _VectorFitting
 
     HAS_SKRF = True
 except ImportError:
@@ -85,12 +86,12 @@ class RFNetwork(StateSpace):
 
         # Select the vector fitting function from scikit-rf
         vf_fun_name = "auto_fit" if auto_fit else "vector_fit"
-        vf_fun = getattr(rf.VectorFitting, vf_fun_name)
+        vf_fun = getattr(_VectorFitting, vf_fun_name)
         # Filter kwargs for the selected vf function
         vf_fun_keys = signature(vf_fun).parameters
         vf_kwargs = {k: v for k, v in kwargs.items() if k in vf_fun_keys}
         # Apply vector fitting
-        vf = rf.VectorFitting(ntwk)
+        vf = _VectorFitting(ntwk)
         getattr(vf, vf_fun_name)(**vf_kwargs)
         A, B, C, D, _ = vf._get_ABCDE()
         # keep a copy of the network and VF
@@ -113,6 +114,6 @@ class RFNetwork(StateSpace):
         s : :py:class:`~numpy.ndarray`
             Complex-valued S-matrices (fxNxN) calculated at frequencies `freqs`.
         """
-        return rf.VectorFitting._get_s_from_ABCDE(
+        return _VectorFitting._get_s_from_ABCDE(
             freqs, self.A, self.B, self.C, self.D, 0
         )
